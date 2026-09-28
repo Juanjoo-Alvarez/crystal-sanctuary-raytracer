@@ -1,0 +1,12 @@
+[package]
+name = "santuario-del-cristal"
+version = "0.1.0"
+edition = "2024"
+authors = ["Juan Jose Rivas Alvarez <24856>"]
+
+[dependencies]
+raylib = { version = "6.0.0", features = ["SUPPORT_IMAGE_GENERATION"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
