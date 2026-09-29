@@ -6,7 +6,7 @@ use crate::{
 };
 
 pub const CHARACTER_MATERIAL_START: usize = 6;
-pub const DEFAULT_CHARACTER_SCALE: f32 = 0.62;
+pub const DEFAULT_CHARACTER_SCALE: f32 = 0.50;
 const CHARACTER_BLOCK_CAPACITY: usize = 24;
 
 pub struct Character {

@@ -17,6 +17,10 @@ const RENDER_HEIGHT: usize = 288;
 const QUALITY_DELAY_SECONDS: f64 = 0.25;
 
 fn main() {
+    if std::env::args().any(|argument| argument == "--benchmark") {
+        render_benchmark();
+        return;
+    }
     if std::env::args().any(|argument| argument == "--render-preview") {
         render_preview();
         return;
@@ -55,7 +59,7 @@ fn main() {
     let mut notice: Option<(&str, f64)> = Some(("ENCUENTRA LOS 3 FRAGMENTOS", 3.5));
 
     // Always present complete frames. No interlacing or mixed camera positions.
-    renderer.max_bounces = 1;
+    renderer.max_bounces = 0;
     renderer.samples_per_pixel = 1;
     renderer.render(&scene, &camera, 0.0);
     texture
@@ -142,6 +146,27 @@ fn main() {
             camera.distance = (camera.distance - wheel * 0.85).clamp(8.5, 24.0);
             camera_changed = true;
         }
+        let camera_speed = 1.35 * dt;
+        if rl.is_key_down(KeyboardKey::KEY_LEFT) {
+            camera.yaw -= camera_speed;
+            auto_rotate = false;
+            camera_changed = true;
+        }
+        if rl.is_key_down(KeyboardKey::KEY_RIGHT) {
+            camera.yaw += camera_speed;
+            auto_rotate = false;
+            camera_changed = true;
+        }
+        if rl.is_key_down(KeyboardKey::KEY_UP) {
+            camera.pitch = (camera.pitch + camera_speed * 0.72).clamp(-0.05, 1.10);
+            auto_rotate = false;
+            camera_changed = true;
+        }
+        if rl.is_key_down(KeyboardKey::KEY_DOWN) {
+            camera.pitch = (camera.pitch - camera_speed * 0.72).clamp(-0.05, 1.10);
+            auto_rotate = false;
+            camera_changed = true;
+        }
         if rl.is_key_pressed(KeyboardKey::KEY_SPACE) {
             auto_rotate = !auto_rotate;
             camera_changed = true;
@@ -185,7 +210,7 @@ fn main() {
             quality_ready = false;
         }
         if render_dirty {
-            renderer.max_bounces = 1;
+            renderer.max_bounces = 0;
             renderer.samples_per_pixel = 1;
             renderer.render(&scene, &camera, time);
             texture
@@ -195,8 +220,8 @@ fn main() {
         }
         let settled = !auto_rotate && f64::from(time) - last_camera_change >= QUALITY_DELAY_SECONDS;
         if settled && !quality_ready {
-            renderer.max_bounces = 4;
-            renderer.samples_per_pixel = 4;
+            renderer.max_bounces = 3;
+            renderer.samples_per_pixel = 3;
             renderer.render(&scene, &camera, time);
             texture
                 .update_texture(&renderer.pixels)
@@ -347,8 +372,8 @@ fn main() {
 
         if show_help {
             let panel_x = screen_width as i32 - 310;
-            d.draw_rectangle(panel_x, 22, 286, 156, Color::new(7, 10, 20, 190));
-            d.draw_rectangle_lines(panel_x, 22, 286, 156, Color::new(103, 177, 192, 130));
+            d.draw_rectangle(panel_x, 22, 286, 176, Color::new(7, 10, 20, 190));
+            d.draw_rectangle_lines(panel_x, 22, 286, 176, Color::new(103, 177, 192, 130));
             d.draw_text(
                 "CONTROLES",
                 panel_x + 18,
@@ -385,9 +410,16 @@ fn main() {
                 Color::RAYWHITE,
             );
             d.draw_text(
-                "R / H         Reiniciar / ayuda",
+                "Flechas       Orbitar camara",
                 panel_x + 18,
                 143,
+                14,
+                Color::RAYWHITE,
+            );
+            d.draw_text(
+                "R / H         Reiniciar / ayuda",
+                panel_x + 18,
+                163,
                 14,
                 Color::RAYWHITE,
             );
@@ -413,4 +445,36 @@ fn render_preview() {
         .save_bmp("screenshots/preview.bmp")
         .expect("No se pudo guardar la captura");
     println!("Captura guardada en screenshots/preview.bmp");
+}
+
+fn render_benchmark() {
+    use std::time::Instant;
+
+    let scene = Scene::sanctuary();
+    let mut camera = Camera {
+        target: Vec3::new(0.3, -0.1, 0.1),
+        yaw: -0.72,
+        pitch: 0.40,
+        distance: 15.0,
+        fov_degrees: 43.0,
+    };
+    let mut renderer = Renderer::new(RENDER_WIDTH, RENDER_HEIGHT);
+    renderer.max_bounces = 0;
+    renderer.samples_per_pixel = 1;
+    renderer.render(&scene, &camera, 0.0);
+
+    const FRAMES: usize = 12;
+    let started = Instant::now();
+    for frame in 0..FRAMES {
+        camera.yaw += 0.012;
+        renderer.render(&scene, &camera, frame as f32 / 20.0);
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    let fps = FRAMES as f64 / elapsed;
+    println!(
+        "Benchmark interactivo: {fps:.1} FPS ({:.2} ms/cuadro, {}x{}, 1 muestra, 0 rebotes)",
+        elapsed * 1000.0 / FRAMES as f64,
+        RENDER_WIDTH,
+        RENDER_HEIGHT
+    );
 }

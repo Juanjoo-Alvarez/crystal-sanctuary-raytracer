@@ -11,8 +11,10 @@ Diorama interactivo inspirado en la lectura visual de las maquetas de aventura. 
 - Cámara orbital, zoom y rotación automática.
 - Framebuffer fijo de 512×288 con cuadros completos, sin barrido entrelazado ni cambios de resolución.
 - Personaje voxel de explorador inspirado en Captain Toad, con sombrero, linterna emisiva, mochila, animación de caminata y cámara de seguimiento.
-- Escala del personaje ajustada a la arquitectura del diorama para conservar una lectura clara del escenario.
+- Escala compacta del personaje ajustada a los pasillos y obstáculos del diorama.
 - Colisiones AABB con columnas, ruinas, agua, mecanismos y bordes del diorama.
+- Puente ensanchado con descansos abiertos y acceso transitable por peldaños, sin necesidad de salto.
+- Rutas de objetivos despejadas y composición por terrazas inspirada en los niveles de Captain Toad.
 - Puzzle de tres fragmentos emisivos y pulsantes: al recogerlos se puede activar el cristal central, cambiar su energía y transformar la iluminación de la escena.
 - Objetivo guiado mediante HUD, indicadores de progreso y mensajes de descubrimiento.
 - Escena modular formada exclusivamente por bloques.
@@ -44,7 +46,13 @@ cargo run --release
 
 Se recomienda usar el perfil `release`, ya que el trazado de rayos se ejecuta en CPU.
 
-La aplicación mantiene siempre un framebuffer de 512×288 y presenta únicamente cuadros completos para evitar mareo o mezcla entre posiciones de cámara. Durante el movimiento usa una muestra y un rebote; al detenerse conserva la misma resolución y calcula cuatro muestras con cuatro rebotes.
+La aplicación mantiene siempre un framebuffer de 512×288 y presenta únicamente cuadros completos para evitar mareo o mezcla entre posiciones de cámara. Durante el movimiento usa una muestra directa optimizada; al detenerse conserva la misma resolución y calcula tres muestras con tres rebotes.
+
+Para medir el rendimiento interactivo del raytracer sin depender de la interfaz:
+
+```bash
+cargo run --release -- --benchmark
+```
 
 Para generar una captura de 960×540 sin abrir la ventana:
 
@@ -57,6 +65,8 @@ cargo run --release -- --render-preview
 - `WASD`: mover a Toad en relación con la cámara.
 - Arrastrar con el botón izquierdo: orbitar la cámara.
 - Rueda del mouse: acercar o alejar.
+- Flechas izquierda/derecha: orbitar horizontalmente.
+- Flechas arriba/abajo: cambiar la elevación de la cámara.
 - `F`: activar o desactivar el seguimiento del explorador.
 - `Espacio`: activar o detener la rotación automática.
 - `R`: reiniciar la cámara, el personaje y el progreso del puzzle.

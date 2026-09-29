@@ -39,7 +39,7 @@ impl Material {
                 let grid = ((point.x * 2.0).floor() as i32 + (point.z * 2.0).floor() as i32) & 1;
                 let noise = hash3(Vec3::new(point.x.floor(), point.y.floor(), point.z.floor()));
                 let stone = self.albedo * (0.78 + noise * 0.28);
-                let moss = Vec3::new(0.16, 0.38, 0.12) * (0.8 + noise * 0.35);
+                let moss = Vec3::new(0.12, 0.50, 0.10) * (0.8 + noise * 0.35);
                 if normal.y > 0.45 && (noise > 0.34 || grid == 0) {
                     stone.lerp(moss, 0.72)
                 } else {
@@ -119,6 +119,8 @@ pub struct Scene {
     block_indices: Vec<usize>,
     character_start: usize,
     character_count: usize,
+    walkable_blocks: Vec<usize>,
+    decorative_blocks: Vec<usize>,
     collectibles: Vec<Collectible>,
     crystal_activated: bool,
 }
@@ -153,7 +155,7 @@ impl Scene {
         let mut materials = vec![
             Material {
                 kind: MaterialKind::MossStone,
-                albedo: Vec3::new(0.31, 0.34, 0.25),
+                albedo: Vec3::new(0.34, 0.42, 0.23),
                 specular: 0.10,
                 reflectivity: 0.03,
                 transparency: 0.0,
@@ -244,14 +246,24 @@ impl Scene {
             Block::new(Vec3::new(0.0, -3.35, 0.0), Vec3::new(3.0, 0.5, 2.2), 0),
             Block::new(Vec3::new(1.7, -0.45, 1.0), Vec3::new(5.4, 0.7, 4.2), 1),
         ];
-        for i in 0..4 {
+        let mut walkable_blocks = vec![0, 1, 2, 3, 4];
+        let mut decorative_blocks = Vec::new();
+        // Wide, walkable steps connect the bridge level with the raised sanctuary.
+        // Their top surfaces exactly match `ground_height`, avoiding invisible walls.
+        for (index, (z, top)) in [
+            (-1.68, -0.40),
+            (-1.46, -0.30),
+            (-1.24, -0.20),
+            (-1.02, -0.10),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let height = top + 1.30;
+            walkable_blocks.push(blocks.len());
             blocks.push(Block::new(
-                Vec3::new(
-                    -1.7 + i as f32 * 0.48,
-                    -0.72 + i as f32 * 0.24,
-                    -1.6 + i as f32 * 0.44,
-                ),
-                Vec3::new(1.45, 0.25, 0.75),
+                Vec3::new(-0.36, top - height * 0.5, z),
+                Vec3::new(1.36 + index as f32 * 0.02, height, 0.24),
                 1,
             ));
         }
@@ -277,20 +289,22 @@ impl Scene {
 
         // Wooden bridge over a narrow ravine.
         for i in 0..8 {
+            walkable_blocks.push(blocks.len());
             blocks.push(Block::new(
                 Vec3::new(-3.25 + i as f32 * 0.48, -0.48, -2.35),
-                Vec3::new(0.40, 0.16, 1.10),
+                Vec3::new(0.40, 0.16, 1.42),
                 2,
             ));
         }
+        // The rails start after the western landing, leaving a generous entrance.
         blocks.push(Block::new(
-            Vec3::new(-1.55, -0.22, -2.85),
-            Vec3::new(4.0, 0.10, 0.10),
+            Vec3::new(-1.30, -0.22, -3.08),
+            Vec3::new(3.40, 0.10, 0.10),
             2,
         ));
         blocks.push(Block::new(
-            Vec3::new(-1.55, -0.22, -1.85),
-            Vec3::new(4.0, 0.10, 0.10),
+            Vec3::new(-2.05, -0.22, -1.62),
+            Vec3::new(1.90, 0.10, 0.10),
             2,
         ));
 
@@ -356,10 +370,10 @@ impl Scene {
 
         // Small decorative cubes create vegetation and visual rhythm.
         for (x, z, h) in [
-            (-4.1, 2.4, 0.7),
-            (-3.4, 2.8, 0.45),
-            (-2.8, 1.9, 0.6),
-            (4.1, 2.8, 0.8),
+            (-4.55, 1.7, 0.7),
+            (-3.9, 3.5, 0.45),
+            (-1.35, 3.45, 0.6),
+            (4.55, 2.8, 0.8),
             (3.7, 3.3, 0.5),
             (-4.3, -0.6, 0.55),
         ] {
@@ -371,11 +385,7 @@ impl Scene {
         }
 
         // Silhouetted trees and shrubs make the island feel inhabited and frame the temple.
-        for (x, z, height) in [
-            (-4.65, 3.25, 1.55),
-            (-4.45, -2.75, 1.25),
-            (4.35, 3.15, 1.45),
-        ] {
+        for (x, z, height) in [(-4.65, 3.25, 1.55), (4.35, 3.15, 1.45)] {
             blocks.push(Block::new(
                 Vec3::new(x, -0.80 + height * 0.36, z),
                 Vec3::new(0.24, height * 0.72, 0.24),
@@ -387,6 +397,7 @@ impl Scene {
                 (0.28, 0.56, -0.04, 0.58),
                 (0.02, 1.06, 0.02, 0.52),
             ] {
+                decorative_blocks.push(blocks.len());
                 blocks.push(Block::new(
                     Vec3::new(x + dx, -0.80 + height * dy, z + dz),
                     Vec3::new(scale, scale * 0.72, scale),
@@ -401,6 +412,7 @@ impl Scene {
             (4.15, 0.55, 0.40),
             (-4.45, 0.75, 0.46),
         ] {
+            decorative_blocks.push(blocks.len());
             blocks.push(Block::new(
                 Vec3::new(x, -0.80 + scale * 0.42, z),
                 Vec3::new(scale, scale * 0.72, scale),
@@ -433,7 +445,7 @@ impl Scene {
         }
 
         // A broken arch and scattered masonry sell the history of the floating ruin.
-        for x in [-3.55, -2.45] {
+        for x in [-3.90, -2.20] {
             blocks.push(Block::new(
                 Vec3::new(x, 0.05, 1.45),
                 Vec3::new(0.38, 1.70, 0.38),
@@ -441,11 +453,11 @@ impl Scene {
             ));
         }
         blocks.push(Block::new(
-            Vec3::new(-3.12, 0.86, 1.45),
-            Vec3::new(1.25, 0.28, 0.38),
+            Vec3::new(-3.05, 0.86, 1.45),
+            Vec3::new(2.08, 0.28, 0.38),
             1,
         ));
-        for (x, z, rotation_hint) in [(-4.15, 1.65, 0.36), (3.75, -0.65, 0.30), (2.75, 3.35, 0.25)]
+        for (x, z, rotation_hint) in [(-4.55, 0.95, 0.36), (4.45, -0.65, 0.30), (2.75, 3.55, 0.25)]
         {
             blocks.push(Block::new(
                 Vec3::new(x, -0.62, z),
@@ -457,9 +469,9 @@ impl Scene {
         // Three crystal fragments form the level's collection puzzle.
         let mut collectibles = Vec::new();
         for position in [
-            Vec3::new(-3.75, -0.48, 2.55),
+            Vec3::new(-3.15, -0.48, 0.55),
             Vec3::new(-2.15, -0.08, -2.35),
-            Vec3::new(3.85, 0.22, 2.65),
+            Vec3::new(4.05, 0.22, 1.10),
         ] {
             let block_index = blocks.len();
             blocks.push(Block::new(
@@ -490,6 +502,8 @@ impl Scene {
             block_indices: Vec::new(),
             character_start,
             character_count,
+            walkable_blocks,
+            decorative_blocks,
             collectibles,
             crystal_activated: false,
         };
@@ -507,7 +521,15 @@ impl Scene {
     pub fn ground_height(x: f32, z: f32) -> f32 {
         if (-1.0..=4.4).contains(&x) && (-1.1..=3.1).contains(&z) {
             -0.10
-        } else if (-3.5..=0.3).contains(&x) && (-2.9..=-1.8).contains(&z) {
+        } else if (-1.05..=0.32).contains(&x) && (-1.80..=-1.56).contains(&z) {
+            -0.40
+        } else if (-1.05..=0.32).contains(&x) && (-1.56..=-1.34).contains(&z) {
+            -0.30
+        } else if (-1.05..=0.32).contains(&x) && (-1.34..=-1.12).contains(&z) {
+            -0.20
+        } else if (-1.05..=0.32).contains(&x) && (-1.12..=-0.90).contains(&z) {
+            -0.10
+        } else if (-3.5..=0.3).contains(&x) && (-3.06..=-1.8).contains(&z) {
             -0.40
         } else {
             -0.80
@@ -528,10 +550,12 @@ impl Scene {
             .iter()
             .enumerate()
             .filter(|(index, _)| {
-                !self
-                    .collectibles
-                    .iter()
-                    .any(|collectible| collectible.block_index == *index)
+                !self.walkable_blocks.contains(index)
+                    && !self.decorative_blocks.contains(index)
+                    && !self
+                        .collectibles
+                        .iter()
+                        .any(|collectible| collectible.block_index == *index)
             })
             .any(|(_, block)| aabbs_overlap(bounds_min, bounds_max, block.min, block.max))
     }
@@ -604,7 +628,9 @@ impl Scene {
         let mut closest = max_distance;
         let mut result = None;
 
-        let mut stack = [0_usize; 256];
+        // A balanced BVH only needs logarithmic traversal depth. Keeping this
+        // stack compact avoids clearing 2 KiB for every primary/shadow ray.
+        let mut stack = [0_usize; 64];
         let mut stack_len = 1;
         while stack_len > 0 {
             stack_len -= 1;
@@ -863,6 +889,10 @@ mod tests {
         assert!((Scene::ground_height(0.0, 0.0) + 0.10).abs() < 0.001);
         assert!((Scene::ground_height(-2.0, -2.3) + 0.40).abs() < 0.001);
         assert!((Scene::ground_height(-3.0, 0.0) + 0.80).abs() < 0.001);
+        assert!((Scene::ground_height(-0.4, -1.68) + 0.40).abs() < 0.001);
+        assert!((Scene::ground_height(-0.4, -1.46) + 0.30).abs() < 0.001);
+        assert!((Scene::ground_height(-0.4, -1.24) + 0.20).abs() < 0.001);
+        assert!((Scene::ground_height(-0.4, -1.02) + 0.10).abs() < 0.001);
     }
 
     #[test]
@@ -875,6 +905,49 @@ mod tests {
         let column = Character::new(Vec3::new(-0.2, -0.10, 0.0), 0.0, DEFAULT_CHARACTER_SCALE);
         let (column_min, column_max) = column.bounding_box();
         assert!(scene.collides_with_world(column_min, column_max));
+    }
+
+    #[test]
+    fn bridge_fragment_and_steps_are_walkable() {
+        let scene = Scene::sanctuary();
+        for (x, y, z) in [
+            (-3.70, -0.80, -2.35),
+            (-3.35, -0.40, -2.35),
+            (-2.15, -0.40, -2.35),
+            (-0.36, -0.40, -1.68),
+            (-0.36, -0.30, -1.46),
+            (-0.36, -0.20, -1.24),
+            (-0.36, -0.10, -1.02),
+        ] {
+            let character = Character::new(Vec3::new(x, y, z), 0.0, DEFAULT_CHARACTER_SCALE);
+            let (bounds_min, bounds_max) = character.bounding_box();
+            assert!(
+                !scene.collides_with_world(bounds_min, bounds_max),
+                "expected walkable position at ({x}, {y}, {z})"
+            );
+        }
+    }
+
+    #[test]
+    fn collectible_routes_have_clear_standing_space() {
+        let scene = Scene::sanctuary();
+        for (x, z) in [(-3.15, 0.55), (-3.05, 1.45), (4.05, 1.10)] {
+            let y = Scene::ground_height(x, z);
+            let character = Character::new(Vec3::new(x, y, z), 0.0, DEFAULT_CHARACTER_SCALE);
+            let (bounds_min, bounds_max) = character.bounding_box();
+            assert!(
+                !scene.collides_with_world(bounds_min, bounds_max),
+                "expected clear objective route at ({x}, {y}, {z})"
+            );
+        }
+
+        let bush = Character::new(
+            Vec3::new(4.15, Scene::ground_height(4.15, 0.55), 0.55),
+            0.0,
+            DEFAULT_CHARACTER_SCALE,
+        );
+        let (bounds_min, bounds_max) = bush.bounding_box();
+        assert!(!scene.collides_with_world(bounds_min, bounds_max));
     }
 
     #[test]

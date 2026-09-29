@@ -80,16 +80,24 @@ impl Renderer {
                         for x in 0..width {
                             let mut color = Vec3::ZERO;
                             for sample in 0..samples_per_pixel {
-                                let jitter_x = hash3(Vec3::new(
-                                    x as f32,
-                                    y as f32,
-                                    sample as f32 * 7.13 + time.floor(),
-                                ));
-                                let jitter_y = hash3(Vec3::new(
-                                    y as f32,
-                                    sample as f32 * 11.71 + time.floor(),
-                                    x as f32,
-                                ));
+                                // A centered sample is both stable and substantially cheaper while
+                                // moving. Jitter is only useful when accumulating multiple samples.
+                                let (jitter_x, jitter_y) = if samples_per_pixel == 1 {
+                                    (0.5, 0.5)
+                                } else {
+                                    (
+                                        hash3(Vec3::new(
+                                            x as f32,
+                                            y as f32,
+                                            sample as f32 * 7.13 + time.floor(),
+                                        )),
+                                        hash3(Vec3::new(
+                                            y as f32,
+                                            sample as f32 * 11.71 + time.floor(),
+                                            x as f32,
+                                        )),
+                                    )
+                                };
                                 let u = (x as f32 + jitter_x) / width as f32;
                                 let v = (y as f32 + jitter_y) / height as f32;
                                 color += trace(scene, camera.ray(u, v, aspect), max_bounces, time);
@@ -226,8 +234,8 @@ fn trace(scene: &Scene, ray: Ray, depth: u32, time: f32) -> Vec3 {
 
 fn sky(direction: Vec3) -> Vec3 {
     let t = (direction.y * 0.5 + 0.5).clamp(0.0, 1.0);
-    let horizon = Vec3::new(1.0, 0.46, 0.22);
-    let zenith = Vec3::new(0.10, 0.17, 0.43);
+    let horizon = Vec3::new(0.90, 0.54, 0.32);
+    let zenith = Vec3::new(0.08, 0.28, 0.70);
     let mut color = horizon.lerp(zenith, t.powf(0.82));
 
     // Layered distant silhouettes give the floating island a real sense of depth.
@@ -237,10 +245,10 @@ fn sky(direction: Vec3) -> Vec3 {
     let near_ridge =
         0.005 + (azimuth * 1.7 - 0.3).sin() * 0.035 + (azimuth * 4.1 + 0.8).cos().abs() * 0.045;
     if direction.y < far_ridge {
-        color = Vec3::new(0.24, 0.19, 0.30).lerp(Vec3::new(0.42, 0.22, 0.25), 0.45);
+        color = Vec3::new(0.20, 0.24, 0.46).lerp(Vec3::new(0.42, 0.30, 0.42), 0.45);
     }
     if direction.y < near_ridge {
-        color = Vec3::new(0.075, 0.10, 0.16).lerp(Vec3::new(0.14, 0.12, 0.18), 0.35);
+        color = Vec3::new(0.055, 0.14, 0.32).lerp(Vec3::new(0.16, 0.20, 0.42), 0.35);
     }
 
     let sun_direction = Vec3::new(-0.42, 0.62, -0.66).normalized();
