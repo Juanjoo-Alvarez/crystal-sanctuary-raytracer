@@ -92,10 +92,16 @@ impl Renderer {
                                 ));
                                 let u = (x as f32 + jitter_x) / width as f32;
                                 let v = (y as f32 + jitter_y) / height as f32;
-                                color += trace(scene, camera.ray(u, v, aspect), max_bounces);
+                                color += trace(scene, camera.ray(u, v, aspect), max_bounces, time);
                             }
-                            let color =
-                                (color / samples_per_pixel as f32).clamp01().powf(1.0 / 2.2);
+                            let mut color = color / samples_per_pixel as f32;
+                            color = tone_map_aces(color * 0.82).powf(1.0 / 2.2);
+                            let screen_x = x as f32 / width as f32 * 2.0 - 1.0;
+                            let screen_y = y as f32 / height as f32 * 2.0 - 1.0;
+                            let vignette = (1.04
+                                - (screen_x * screen_x + screen_y * screen_y) * 0.13)
+                                .clamp(0.72, 1.0);
+                            color = (color * vignette).clamp01();
                             let index = x * 4;
                             row[index] = (color.x * 255.0) as u8;
                             row[index + 1] = (color.y * 255.0) as u8;
@@ -134,12 +140,12 @@ impl Renderer {
     }
 }
 
-fn trace(scene: &Scene, ray: Ray, depth: u32) -> Vec3 {
+fn trace(scene: &Scene, ray: Ray, depth: u32, time: f32) -> Vec3 {
     let Some(hit) = scene.hit(ray, 0.002, 1000.0) else {
         return sky(ray.direction);
     };
     let material = scene.materials[hit.material];
-    let albedo = material.sample_albedo(hit.point, hit.normal);
+    let albedo = material.sample_albedo(hit.point, hit.normal, time);
     let view = -ray.direction;
 
     let to_light = scene.light_position - hit.point;
@@ -168,10 +174,15 @@ fn trace(scene: &Scene, ray: Ray, depth: u32) -> Vec3 {
     let ambient = Vec3::new(0.17, 0.23, 0.31) * (0.55 + hit.normal.y.max(0.0) * 0.45);
     let mut color =
         albedo * ambient + albedo * scene.light_color * diffuse + scene.light_color * specular;
-    color += material.emission;
+    let emission_pulse = if matches!(material.kind, crate::scene::MaterialKind::Crystal) {
+        0.88 + (time * 2.4 + hit.point.y * 1.7).sin() * 0.12
+    } else {
+        1.0
+    };
+    color += material.emission * emission_pulse;
 
     if depth == 0 {
-        return color;
+        return apply_atmosphere(color, ray.direction, hit.distance);
     }
 
     let cosine = view.dot(hit.normal).clamp(0.0, 1.0);
@@ -185,6 +196,7 @@ fn trace(scene: &Scene, ray: Ray, depth: u32) -> Vec3 {
                 direction: reflected,
             },
             depth - 1,
+            time,
         );
         color = color.lerp(reflected_color, fresnel.clamp(0.0, 0.88));
     }
@@ -203,27 +215,62 @@ fn trace(scene: &Scene, ray: Ray, depth: u32) -> Vec3 {
                     direction: refracted.normalized(),
                 },
                 depth - 1,
+                time,
             );
             let tint = refracted_color * albedo.lerp(Vec3::ONE, 0.72);
             color = color.lerp(tint, material.transparency * (1.0 - fresnel));
         }
     }
-    color
+    apply_atmosphere(color, ray.direction, hit.distance)
 }
 
 fn sky(direction: Vec3) -> Vec3 {
     let t = (direction.y * 0.5 + 0.5).clamp(0.0, 1.0);
-    let horizon = Vec3::new(1.0, 0.38, 0.18);
-    let zenith = Vec3::new(0.16, 0.20, 0.48);
-    let mut color = horizon.lerp(zenith, t.powf(0.7));
+    let horizon = Vec3::new(1.0, 0.46, 0.22);
+    let zenith = Vec3::new(0.10, 0.17, 0.43);
+    let mut color = horizon.lerp(zenith, t.powf(0.82));
+
+    // Layered distant silhouettes give the floating island a real sense of depth.
+    let azimuth = direction.x.atan2(direction.z);
+    let far_ridge =
+        0.025 + (azimuth * 2.4 + 0.9).sin() * 0.020 + (azimuth * 5.7 - 1.2).sin().abs() * 0.030;
+    let near_ridge =
+        0.005 + (azimuth * 1.7 - 0.3).sin() * 0.035 + (azimuth * 4.1 + 0.8).cos().abs() * 0.045;
+    if direction.y < far_ridge {
+        color = Vec3::new(0.24, 0.19, 0.30).lerp(Vec3::new(0.42, 0.22, 0.25), 0.45);
+    }
+    if direction.y < near_ridge {
+        color = Vec3::new(0.075, 0.10, 0.16).lerp(Vec3::new(0.14, 0.12, 0.18), 0.35);
+    }
+
     let sun_direction = Vec3::new(-0.42, 0.62, -0.66).normalized();
     let sun = direction.dot(sun_direction).max(0.0);
-    color += Vec3::new(1.0, 0.55, 0.22) * sun.powf(96.0) * 2.8;
-    color += Vec3::new(1.0, 0.82, 0.56) * sun.powf(950.0) * 5.0;
-    let cloud_noise =
-        ((direction.x * 11.0 + direction.z * 8.0).sin() * (direction.z * 17.0).cos()).abs();
-    if direction.y > 0.03 && direction.y < 0.35 && cloud_noise > 0.72 {
-        color = color.lerp(Vec3::new(1.0, 0.61, 0.46), 0.18);
+    color += Vec3::new(1.0, 0.44, 0.16) * sun.powf(52.0) * 1.8;
+    color += Vec3::new(1.0, 0.86, 0.58) * sun.powf(720.0) * 7.0;
+
+    // Broad soft cloud bands instead of a noisy checker pattern.
+    if direction.y > 0.08 && direction.y < 0.48 {
+        let cloud_shape = (azimuth * 5.0 + direction.y * 17.0).sin() * 0.46
+            + (azimuth * 11.0 - direction.y * 9.0).cos() * 0.29
+            + (azimuth * 19.0 + 1.7).sin() * 0.15;
+        let cloud = ((cloud_shape - 0.24) * 2.5).clamp(0.0, 1.0)
+            * ((0.48 - direction.y) / 0.40).clamp(0.0, 1.0);
+        color = color.lerp(Vec3::new(1.0, 0.68, 0.55), cloud * 0.28);
     }
     color
+}
+
+fn apply_atmosphere(color: Vec3, direction: Vec3, distance: f32) -> Vec3 {
+    let fog = (1.0 - (-distance * 0.018).exp()).clamp(0.0, 0.30);
+    color.lerp(sky(direction), fog * 0.42)
+}
+
+fn tone_map_aces(color: Vec3) -> Vec3 {
+    fn channel(value: f32) -> f32 {
+        let numerator = value * (2.51 * value + 0.03);
+        let denominator = value * (2.43 * value + 0.59) + 0.14;
+        (numerator / denominator).clamp(0.0, 1.0)
+    }
+
+    Vec3::new(channel(color.x), channel(color.y), channel(color.z))
 }

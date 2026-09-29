@@ -9,13 +9,20 @@ Diorama interactivo inspirado en la lectura visual de las maquetas de aventura. 
 
 - Intersección analítica rayo–caja mediante el método *slab*.
 - Cámara orbital, zoom y rotación automática.
-- Resolución dinámica: respuesta rápida en movimiento y refinado automático al detenerse.
+- Framebuffer fijo de 512×288 con cuadros completos, sin barrido entrelazado ni cambios de resolución.
+- Personaje voxel de explorador inspirado en Captain Toad, con sombrero, linterna emisiva, mochila, animación de caminata y cámara de seguimiento.
+- Escala del personaje ajustada a la arquitectura del diorama para conservar una lectura clara del escenario.
+- Colisiones AABB con columnas, ruinas, agua, mecanismos y bordes del diorama.
+- Puzzle de tres fragmentos emisivos y pulsantes: al recogerlos se puede activar el cristal central, cambiar su energía y transformar la iluminación de la escena.
+- Objetivo guiado mediante HUD, indicadores de progreso y mensajes de descubrimiento.
 - Escena modular formada exclusivamente por bloques.
-- Cinco materiales procedurales con parámetros independientes.
-- Sombras, iluminación especular y corrección gamma.
+- Santuario ambientado con árboles voxelados, arbustos, faroles, un arco derruido y mampostería dispersa.
+- Agua, cascada y cristales con variación animada calculada dentro del material.
+- Seis materiales principales procedurales con parámetros independientes, además de materiales del personaje, vegetación y energía.
+- Sombras, iluminación especular, niebla atmosférica, viñeta y tone mapping cinematográfico ACES.
 - Reflexión recursiva en cobre y cristal.
 - Refracción con índice de refracción y efecto Fresnel.
-- Skybox procedural de atardecer.
+- Skybox procedural de atardecer con sol, nubes amplias y siluetas montañosas por capas.
 - Renderizado paralelo usando hilos de la biblioteca estándar de Rust.
 
 ## Materiales
@@ -37,7 +44,7 @@ cargo run --release
 
 Se recomienda usar el perfil `release`, ya que el trazado de rayos se ejecuta en CPU.
 
-La aplicación comienza con la rotación pausada. Mientras se mueve la cámara usa un framebuffer de 400×225 para responder con rapidez; después de 0.3 segundos sin movimiento cambia automáticamente a 800×450, dos muestras por píxel y cuatro rebotes. La etiqueta inferior indica `INTERACTIVO` o `CALIDAD`.
+La aplicación mantiene siempre un framebuffer de 512×288 y presenta únicamente cuadros completos para evitar mareo o mezcla entre posiciones de cámara. Durante el movimiento usa una muestra y un rebote; al detenerse conserva la misma resolución y calcula cuatro muestras con cuatro rebotes.
 
 Para generar una captura de 960×540 sin abrir la ventana:
 
@@ -47,16 +54,17 @@ cargo run --release -- --render-preview
 
 ## Controles
 
+- `WASD`: mover a Toad en relación con la cámara.
 - Arrastrar con el botón izquierdo: orbitar la cámara.
 - Rueda del mouse: acercar o alejar.
+- `F`: activar o desactivar el seguimiento del explorador.
 - `Espacio`: activar o detener la rotación automática.
-- `R`: restaurar la cámara.
+- `R`: reiniciar la cámara, el personaje y el progreso del puzzle.
 - `H`: ocultar o mostrar la ayuda.
 
 ## Próximos avances
 
 - Animación real de la rueda de cobre y del agua.
-- Mayor variedad de vegetación y arquitectura.
 - Acumulación temporal y modo de captura en alta resolución.
 - Texturas almacenadas como recursos del proyecto.
 - Video de presentación y galería final.

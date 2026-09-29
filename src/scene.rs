@@ -1,4 +1,7 @@
-use crate::math::{Vec3, hash3};
+use crate::{
+    character::{Character, DEFAULT_CHARACTER_SCALE},
+    math::{Vec3, hash3},
+};
 
 #[derive(Clone, Copy)]
 pub struct Ray {
@@ -14,6 +17,7 @@ pub enum MaterialKind {
     Copper,
     Crystal,
     Water,
+    Solid,
 }
 
 #[derive(Clone, Copy)]
@@ -29,7 +33,7 @@ pub struct Material {
 }
 
 impl Material {
-    pub fn sample_albedo(&self, point: Vec3, normal: Vec3) -> Vec3 {
+    pub fn sample_albedo(&self, point: Vec3, normal: Vec3, time: f32) -> Vec3 {
         match self.kind {
             MaterialKind::MossStone => {
                 let grid = ((point.x * 2.0).floor() as i32 + (point.z * 2.0).floor() as i32) & 1;
@@ -64,13 +68,17 @@ impl Material {
                 }
             }
             MaterialKind::Crystal => {
-                let shimmer = ((point.y * 8.0 + point.x * 5.0).sin() * 0.5 + 0.5) * 0.12;
+                let shimmer =
+                    ((point.y * 8.0 + point.x * 5.0 - time * 2.8).sin() * 0.5 + 0.5) * 0.12;
                 self.albedo + Vec3::new(0.0, shimmer * 0.5, shimmer)
             }
             MaterialKind::Water => {
-                let ripples = ((point.x * 7.0).sin() + (point.z * 9.0).cos()) * 0.035;
+                let horizontal = (point.x * 7.0 + time * 1.7).sin();
+                let vertical = (point.z * 9.0 - time * 2.2 + point.y * 5.0).cos();
+                let ripples = (horizontal + vertical) * 0.035;
                 self.albedo + Vec3::new(0.0, ripples, ripples * 1.7)
             }
+            MaterialKind::Solid => self.albedo,
         }
     }
 }
@@ -109,6 +117,25 @@ pub struct Scene {
     pub light_color: Vec3,
     bvh_nodes: Vec<BvhNode>,
     block_indices: Vec<usize>,
+    character_start: usize,
+    character_count: usize,
+    collectibles: Vec<Collectible>,
+    crystal_activated: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Collectible {
+    block_index: usize,
+    position: Vec3,
+    material: usize,
+    active: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct PuzzleStatus {
+    pub collected: usize,
+    pub total: usize,
+    pub crystal_activated: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -123,7 +150,7 @@ struct BvhNode {
 
 impl Scene {
     pub fn sanctuary() -> Self {
-        let materials = vec![
+        let mut materials = vec![
             Material {
                 kind: MaterialKind::MossStone,
                 albedo: Vec3::new(0.31, 0.34, 0.25),
@@ -185,6 +212,29 @@ impl Scene {
                 emission: Vec3::ZERO,
             },
         ];
+        materials.extend(Character::materials());
+        let foliage_material = materials.len();
+        materials.push(Material {
+            kind: MaterialKind::Solid,
+            albedo: Vec3::new(0.08, 0.34, 0.16),
+            specular: 0.16,
+            reflectivity: 0.025,
+            transparency: 0.0,
+            ior: 1.0,
+            roughness: 0.82,
+            emission: Vec3::ZERO,
+        });
+        let fragment_material = materials.len();
+        materials.push(Material {
+            kind: MaterialKind::Crystal,
+            albedo: Vec3::new(0.12, 0.88, 1.0),
+            specular: 0.98,
+            reflectivity: 0.28,
+            transparency: 0.22,
+            ior: 1.42,
+            roughness: 0.03,
+            emission: Vec3::new(0.08, 0.65, 0.92),
+        });
 
         // Floating island core and raised sanctuary.
         let mut blocks = vec![
@@ -320,6 +370,117 @@ impl Scene {
             ));
         }
 
+        // Silhouetted trees and shrubs make the island feel inhabited and frame the temple.
+        for (x, z, height) in [
+            (-4.65, 3.25, 1.55),
+            (-4.45, -2.75, 1.25),
+            (4.35, 3.15, 1.45),
+        ] {
+            blocks.push(Block::new(
+                Vec3::new(x, -0.80 + height * 0.36, z),
+                Vec3::new(0.24, height * 0.72, 0.24),
+                2,
+            ));
+            for (dx, dy, dz, scale) in [
+                (0.0, 0.78, 0.0, 0.82),
+                (-0.28, 0.58, 0.05, 0.60),
+                (0.28, 0.56, -0.04, 0.58),
+                (0.02, 1.06, 0.02, 0.52),
+            ] {
+                blocks.push(Block::new(
+                    Vec3::new(x + dx, -0.80 + height * dy, z + dz),
+                    Vec3::new(scale, scale * 0.72, scale),
+                    foliage_material,
+                ));
+            }
+        }
+        for (x, z, scale) in [
+            (-3.4, 3.25, 0.55),
+            (-2.65, 3.45, 0.42),
+            (3.35, -3.25, 0.48),
+            (4.15, 0.55, 0.40),
+            (-4.45, 0.75, 0.46),
+        ] {
+            blocks.push(Block::new(
+                Vec3::new(x, -0.80 + scale * 0.42, z),
+                Vec3::new(scale, scale * 0.72, scale),
+                foliage_material,
+            ));
+        }
+
+        // Two luminous wayfinding lanterns subtly lead from the spawn toward the sanctuary.
+        for (x, z) in [(-2.15, 1.20), (3.25, -2.75)] {
+            blocks.push(Block::new(
+                Vec3::new(x, -0.24, z),
+                Vec3::new(0.14, 1.12, 0.14),
+                3,
+            ));
+            blocks.push(Block::new(
+                Vec3::new(x, 0.38, z),
+                Vec3::new(0.38, 0.12, 0.38),
+                3,
+            ));
+            blocks.push(Block::new(
+                Vec3::new(x, 0.55, z),
+                Vec3::new(0.22, 0.28, 0.22),
+                fragment_material,
+            ));
+            blocks.push(Block::new(
+                Vec3::new(x, 0.74, z),
+                Vec3::new(0.34, 0.10, 0.34),
+                3,
+            ));
+        }
+
+        // A broken arch and scattered masonry sell the history of the floating ruin.
+        for x in [-3.55, -2.45] {
+            blocks.push(Block::new(
+                Vec3::new(x, 0.05, 1.45),
+                Vec3::new(0.38, 1.70, 0.38),
+                1,
+            ));
+        }
+        blocks.push(Block::new(
+            Vec3::new(-3.12, 0.86, 1.45),
+            Vec3::new(1.25, 0.28, 0.38),
+            1,
+        ));
+        for (x, z, rotation_hint) in [(-4.15, 1.65, 0.36), (3.75, -0.65, 0.30), (2.75, 3.35, 0.25)]
+        {
+            blocks.push(Block::new(
+                Vec3::new(x, -0.62, z),
+                Vec3::new(0.68, rotation_hint, 0.48),
+                1,
+            ));
+        }
+
+        // Three crystal fragments form the level's collection puzzle.
+        let mut collectibles = Vec::new();
+        for position in [
+            Vec3::new(-3.75, -0.48, 2.55),
+            Vec3::new(-2.15, -0.08, -2.35),
+            Vec3::new(3.85, 0.22, 2.65),
+        ] {
+            let block_index = blocks.len();
+            blocks.push(Block::new(
+                position,
+                Vec3::new(0.28, 0.46, 0.28),
+                fragment_material,
+            ));
+            collectibles.push(Collectible {
+                block_index,
+                position,
+                material: fragment_material,
+                active: true,
+            });
+        }
+
+        let character_start = blocks.len();
+        let default_character =
+            Character::new(Vec3::new(-2.15, -0.8, 2.50), 0.0, DEFAULT_CHARACTER_SCALE);
+        blocks.extend_from_slice(default_character.blocks());
+        let character_count = blocks.len() - character_start;
+
         let mut scene = Self {
             blocks,
             materials,
@@ -327,9 +488,116 @@ impl Scene {
             light_color: Vec3::new(1.0, 0.72, 0.48) * 6.0,
             bvh_nodes: Vec::new(),
             block_indices: Vec::new(),
+            character_start,
+            character_count,
+            collectibles,
+            crystal_activated: false,
         };
         scene.rebuild_bvh();
         scene
+    }
+
+    pub fn update_character(&mut self, character: &[Block]) {
+        debug_assert_eq!(character.len(), self.character_count);
+        self.blocks[self.character_start..self.character_start + self.character_count]
+            .copy_from_slice(character);
+        self.rebuild_bvh();
+    }
+
+    pub fn ground_height(x: f32, z: f32) -> f32 {
+        if (-1.0..=4.4).contains(&x) && (-1.1..=3.1).contains(&z) {
+            -0.10
+        } else if (-3.5..=0.3).contains(&x) && (-2.9..=-1.8).contains(&z) {
+            -0.40
+        } else {
+            -0.80
+        }
+    }
+
+    pub fn collides_with_world(&self, bounds_min: Vec3, bounds_max: Vec3) -> bool {
+        const EDGE_MARGIN: f32 = 0.04;
+        if bounds_min.x < -5.0 + EDGE_MARGIN
+            || bounds_max.x > 5.0 - EDGE_MARGIN
+            || bounds_min.z < -4.0 + EDGE_MARGIN
+            || bounds_max.z > 4.0 - EDGE_MARGIN
+        {
+            return true;
+        }
+
+        self.blocks[..self.character_start]
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                !self
+                    .collectibles
+                    .iter()
+                    .any(|collectible| collectible.block_index == *index)
+            })
+            .any(|(_, block)| aabbs_overlap(bounds_min, bounds_max, block.min, block.max))
+    }
+
+    pub fn collect_near(&mut self, player_position: Vec3) -> bool {
+        let mut collected_any = false;
+        for collectible in &mut self.collectibles {
+            let offset = collectible.position - player_position;
+            let horizontal_distance = Vec3::new(offset.x, 0.0, offset.z).length();
+            if collectible.active && horizontal_distance < 0.72 {
+                collectible.active = false;
+                self.blocks[collectible.block_index] = Block::new(
+                    Vec3::new(0.0, -100.0, 0.0),
+                    Vec3::new(0.01, 0.01, 0.01),
+                    collectible.material,
+                );
+                collected_any = true;
+            }
+        }
+        if collected_any {
+            self.rebuild_bvh();
+        }
+        collected_any
+    }
+
+    pub fn try_activate_crystal(&mut self, player_position: Vec3) -> bool {
+        if self.crystal_activated || self.collectibles.iter().any(|item| item.active) {
+            return false;
+        }
+        let crystal_position = Vec3::new(1.65, -0.10, 1.15);
+        let offset = crystal_position - player_position;
+        if Vec3::new(offset.x, 0.0, offset.z).length() < 1.15 {
+            self.crystal_activated = true;
+            self.light_color = Vec3::new(0.42, 0.82, 1.0) * 7.5;
+            self.materials[4].albedo = Vec3::new(0.18, 0.82, 1.0);
+            self.materials[4].emission = Vec3::new(0.18, 0.72, 1.18);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn puzzle_status(&self) -> PuzzleStatus {
+        let total = self.collectibles.len();
+        let remaining = self.collectibles.iter().filter(|item| item.active).count();
+        PuzzleStatus {
+            collected: total - remaining,
+            total,
+            crystal_activated: self.crystal_activated,
+        }
+    }
+
+    pub fn reset_puzzle(&mut self) {
+        for collectible in &mut self.collectibles {
+            collectible.active = true;
+            self.blocks[collectible.block_index] = Block::new(
+                collectible.position,
+                Vec3::new(0.28, 0.46, 0.28),
+                collectible.material,
+            );
+        }
+        self.crystal_activated = false;
+        self.light_color = Vec3::new(1.0, 0.72, 0.48) * 6.0;
+        self.materials[4].albedo = Vec3::new(0.10, 0.62, 0.92);
+        self.materials[4].emission = Vec3::new(0.02, 0.16, 0.28);
+        self.rebuild_bvh();
     }
 
     pub fn hit(&self, ray: Ray, min_distance: f32, max_distance: f32) -> Option<Hit> {
@@ -398,6 +666,16 @@ impl Scene {
             self.blocks.len(),
         );
     }
+}
+
+fn aabbs_overlap(a_min: Vec3, a_max: Vec3, b_min: Vec3, b_max: Vec3) -> bool {
+    const EPSILON: f32 = 0.006;
+    a_min.x < b_max.x - EPSILON
+        && a_max.x > b_min.x + EPSILON
+        && a_min.y < b_max.y - EPSILON
+        && a_max.y > b_min.y + EPSILON
+        && a_min.z < b_max.z - EPSILON
+        && a_max.z > b_min.z + EPSILON
 }
 
 fn build_bvh_node(
@@ -566,5 +844,53 @@ mod tests {
         assert!((hit.distance - 1.0).abs() < 0.0001);
         assert!(!hit.front_face);
         assert!(hit.normal.x < -0.99);
+    }
+
+    #[test]
+    fn character_update_moves_geometry_and_rebuilds_bvh() {
+        let mut scene = Scene::sanctuary();
+        let original_min = scene.blocks[scene.character_start].min;
+        let mut character = Character::new(Vec3::new(2.0, -0.10, 1.0), 1.2, 1.0);
+        character.rebuild_geometry();
+        scene.update_character(character.blocks());
+        let moved_min = scene.blocks[scene.character_start].min;
+        assert!((moved_min.x - original_min.x).abs() > 1.0);
+        assert!(!scene.bvh_nodes.is_empty());
+    }
+
+    #[test]
+    fn ground_height_matches_main_platforms() {
+        assert!((Scene::ground_height(0.0, 0.0) + 0.10).abs() < 0.001);
+        assert!((Scene::ground_height(-2.0, -2.3) + 0.40).abs() < 0.001);
+        assert!((Scene::ground_height(-3.0, 0.0) + 0.80).abs() < 0.001);
+    }
+
+    #[test]
+    fn collision_detects_column_but_not_spawn() {
+        let scene = Scene::sanctuary();
+        let spawn = Character::new(Vec3::new(-2.15, -0.8, 2.50), 0.0, DEFAULT_CHARACTER_SCALE);
+        let (spawn_min, spawn_max) = spawn.bounding_box();
+        assert!(!scene.collides_with_world(spawn_min, spawn_max));
+
+        let column = Character::new(Vec3::new(-0.2, -0.10, 0.0), 0.0, DEFAULT_CHARACTER_SCALE);
+        let (column_min, column_max) = column.bounding_box();
+        assert!(scene.collides_with_world(column_min, column_max));
+    }
+
+    #[test]
+    fn collecting_all_fragments_unlocks_crystal() {
+        let mut scene = Scene::sanctuary();
+        let positions: Vec<Vec3> = scene
+            .collectibles
+            .iter()
+            .map(|item| item.position)
+            .collect();
+        for position in positions {
+            assert!(scene.collect_near(position));
+        }
+        let status = scene.puzzle_status();
+        assert_eq!(status.collected, status.total);
+        assert!(scene.try_activate_crystal(Vec3::new(1.65, -0.10, 1.15)));
+        assert!(scene.puzzle_status().crystal_activated);
     }
 }
