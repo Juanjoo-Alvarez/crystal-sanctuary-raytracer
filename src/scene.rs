@@ -1,7 +1,33 @@
 use crate::{
     character::{Character, DEFAULT_CHARACTER_SCALE},
+    enemy,
     math::{Vec3, hash3},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LevelKind {
+    Hills,
+    Haunted,
+    Aquatic,
+}
+
+impl LevelKind {
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Hills => 0,
+            Self::Haunted => 1,
+            Self::Aquatic => 2,
+        }
+    }
+
+    pub const fn next(self) -> Option<Self> {
+        match self {
+            Self::Hills => Some(Self::Haunted),
+            Self::Haunted => Some(Self::Aquatic),
+            Self::Aquatic => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Ray {
@@ -115,14 +141,37 @@ pub struct Scene {
     pub materials: Vec<Material>,
     pub light_position: Vec3,
     pub light_color: Vec3,
+    pub level: LevelKind,
     bvh_nodes: Vec<BvhNode>,
     block_indices: Vec<usize>,
     character_start: usize,
     character_count: usize,
+    enemy_start: usize,
+    enemy_count: usize,
     walkable_blocks: Vec<usize>,
     decorative_blocks: Vec<usize>,
     collectibles: Vec<Collectible>,
+    elevator: Elevator,
     crystal_activated: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Elevator {
+    block_index: usize,
+    center: Vec3,
+    size: Vec3,
+    bottom_top: f32,
+    top_top: f32,
+    current_top: f32,
+    phase: f32,
+}
+
+impl Elevator {
+    fn contains(&self, x: f32, z: f32) -> bool {
+        let boarding_margin = 0.02;
+        (x - self.center.x).abs() <= self.size.x * 0.5 + boarding_margin
+            && (z - self.center.z).abs() <= self.size.z * 0.5 + boarding_margin
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -151,7 +200,12 @@ struct BvhNode {
 }
 
 impl Scene {
+    #[cfg(test)]
     pub fn sanctuary() -> Self {
+        Self::for_level(LevelKind::Hills)
+    }
+
+    pub fn for_level(level: LevelKind) -> Self {
         let mut materials = vec![
             Material {
                 kind: MaterialKind::MossStone,
@@ -215,6 +269,7 @@ impl Scene {
             },
         ];
         materials.extend(Character::materials());
+        materials.extend(enemy::materials());
         let foliage_material = materials.len();
         materials.push(Material {
             kind: MaterialKind::Solid,
@@ -238,11 +293,36 @@ impl Scene {
             emission: Vec3::new(0.08, 0.65, 0.92),
         });
 
+        match level {
+            LevelKind::Hills => {}
+            LevelKind::Haunted => {
+                materials[0].kind = MaterialKind::Solid;
+                materials[0].albedo = Vec3::new(0.13, 0.12, 0.20);
+                materials[1].albedo = Vec3::new(0.34, 0.25, 0.42);
+                materials[2].albedo = Vec3::new(0.13, 0.055, 0.10);
+                materials[3].albedo = Vec3::new(0.44, 0.16, 0.40);
+                materials[4].albedo = Vec3::new(0.34, 0.94, 0.58);
+                materials[4].emission = Vec3::new(0.04, 0.34, 0.13);
+                materials[5].albedo = Vec3::new(0.26, 0.14, 0.42);
+                materials[foliage_material].albedo = Vec3::new(0.12, 0.20, 0.16);
+            }
+            LevelKind::Aquatic => {
+                materials[0].albedo = Vec3::new(0.16, 0.40, 0.34);
+                materials[1].albedo = Vec3::new(0.78, 0.62, 0.34);
+                materials[2].albedo = Vec3::new(0.25, 0.12, 0.06);
+                materials[3].albedo = Vec3::new(0.76, 0.34, 0.13);
+                materials[4].albedo = Vec3::new(0.06, 0.82, 1.0);
+                materials[4].emission = Vec3::new(0.02, 0.24, 0.40);
+                materials[5].albedo = Vec3::new(0.025, 0.38, 0.68);
+                materials[foliage_material].albedo = Vec3::new(0.04, 0.42, 0.30);
+            }
+        }
+
         // Floating island core and raised sanctuary.
         let mut blocks = vec![
-            Block::new(Vec3::new(0.0, -1.3, 0.0), Vec3::new(10.0, 1.0, 8.0), 0),
-            Block::new(Vec3::new(0.0, -2.15, 0.0), Vec3::new(8.0, 0.7, 6.0), 0),
-            Block::new(Vec3::new(0.0, -2.8, 0.0), Vec3::new(5.6, 0.6, 4.2), 0),
+            Block::new(Vec3::new(0.0, -1.3, 0.0), Vec3::new(13.0, 1.0, 10.4), 0),
+            Block::new(Vec3::new(0.0, -2.15, 0.0), Vec3::new(10.8, 0.7, 8.4), 0),
+            Block::new(Vec3::new(0.0, -2.8, 0.0), Vec3::new(7.8, 0.6, 6.2), 0),
             Block::new(Vec3::new(0.0, -3.35, 0.0), Vec3::new(3.0, 0.5, 2.2), 0),
             Block::new(Vec3::new(1.7, -0.45, 1.0), Vec3::new(5.4, 0.7, 4.2), 1),
         ];
@@ -307,32 +387,6 @@ impl Scene {
             Vec3::new(1.90, 0.10, 0.10),
             2,
         ));
-
-        // Copper mechanism: wheel-like cross and supports.
-        blocks.push(Block::new(
-            Vec3::new(4.25, 0.25, -1.85),
-            Vec3::new(0.35, 2.8, 0.35),
-            3,
-        ));
-        blocks.push(Block::new(
-            Vec3::new(4.25, 1.65, -1.85),
-            Vec3::new(2.3, 0.24, 0.30),
-            3,
-        ));
-        blocks.push(Block::new(
-            Vec3::new(4.25, 1.65, -1.85),
-            Vec3::new(0.24, 2.3, 0.30),
-            3,
-        ));
-        for &dx in &[-0.82, 0.82] {
-            for &dy in &[-0.82, 0.82] {
-                blocks.push(Block::new(
-                    Vec3::new(4.25 + dx, 1.65 + dy, -1.85),
-                    Vec3::new(0.34, 0.34, 0.34),
-                    3,
-                ));
-            }
-        }
 
         // Multi-block crystal gives a faceted, readable silhouette using only cubes.
         blocks.push(Block::new(
@@ -421,7 +475,7 @@ impl Scene {
         }
 
         // Two luminous wayfinding lanterns subtly lead from the spawn toward the sanctuary.
-        for (x, z) in [(-2.15, 1.20), (3.25, -2.75)] {
+        for (x, z) in [(-2.15, 1.20), (2.55, -2.15)] {
             blocks.push(Block::new(
                 Vec3::new(x, -0.24, z),
                 Vec3::new(0.14, 1.12, 0.14),
@@ -466,13 +520,102 @@ impl Scene {
             ));
         }
 
+        if level == LevelKind::Haunted {
+            (blocks, walkable_blocks, decorative_blocks) = build_haunted_layout(fragment_material);
+        } else if level == LevelKind::Aquatic {
+            (blocks, walkable_blocks, decorative_blocks) =
+                build_aquatic_layout(fragment_material, foliage_material);
+        }
+
+        let elevator = add_vertical_landmark(
+            level,
+            &mut blocks,
+            &mut walkable_blocks,
+            &mut decorative_blocks,
+            fragment_material,
+            foliage_material,
+        );
+
+        match level {
+            LevelKind::Hills => {
+                for (x, z) in [(-4.25, 3.25), (-1.55, 3.55), (4.45, 0.15), (3.25, -3.45)] {
+                    decorative_blocks.push(blocks.len());
+                    blocks.push(Block::new(
+                        Vec3::new(x, -0.68, z),
+                        Vec3::new(0.13, 0.24, 0.13),
+                        fragment_material,
+                    ));
+                }
+            }
+            LevelKind::Haunted => {
+                for (x, z, height) in [
+                    (-4.45, -1.20, 0.72),
+                    (-4.30, 1.95, 0.58),
+                    (5.75, 4.40, 0.82),
+                    (3.65, -3.45, 0.66),
+                ] {
+                    blocks.push(Block::new(
+                        Vec3::new(x, -0.80 + height * 0.5, z),
+                        Vec3::new(0.46, height, 0.20),
+                        1,
+                    ));
+                    decorative_blocks.push(blocks.len());
+                    blocks.push(Block::new(
+                        Vec3::new(x, -0.28 + height, z - 0.12),
+                        Vec3::new(0.11, 0.24, 0.11),
+                        fragment_material,
+                    ));
+                }
+                blocks.push(Block::new(
+                    Vec3::new(4.45, 0.10, -2.65),
+                    Vec3::new(0.55, 1.80, 0.55),
+                    0,
+                ));
+            }
+            LevelKind::Aquatic => {
+                for (x, z, height, material) in [
+                    (-4.40, -1.15, 0.85, 3),
+                    (-4.25, 2.05, 0.62, fragment_material),
+                    (4.40, 3.30, 0.95, 3),
+                    (3.55, -3.45, 0.72, fragment_material),
+                    (4.45, -0.55, 0.58, foliage_material),
+                ] {
+                    decorative_blocks.push(blocks.len());
+                    blocks.push(Block::new(
+                        Vec3::new(x, -0.80 + height * 0.5, z),
+                        Vec3::new(0.22, height, 0.22),
+                        material,
+                    ));
+                    decorative_blocks.push(blocks.len());
+                    blocks.push(Block::new(
+                        Vec3::new(x + 0.18, -0.48 + height * 0.45, z),
+                        Vec3::new(0.28, 0.16, 0.18),
+                        material,
+                    ));
+                }
+            }
+        }
+
         // Three crystal fragments form the level's collection puzzle.
+        let collectible_positions = match level {
+            LevelKind::Hills => [
+                Vec3::new(-3.15, -0.48, 0.55),
+                Vec3::new(-2.15, -0.08, -2.35),
+                Vec3::new(5.18, 1.52, -3.15),
+            ],
+            LevelKind::Haunted => [
+                Vec3::new(-4.05, -0.48, 2.45),
+                Vec3::new(-3.35, -0.13, -1.85),
+                Vec3::new(5.18, 1.62, 0.05),
+            ],
+            LevelKind::Aquatic => [
+                Vec3::new(-4.05, -0.48, 2.45),
+                Vec3::new(-3.10, -0.08, -1.90),
+                Vec3::new(5.12, 1.42, -2.85),
+            ],
+        };
         let mut collectibles = Vec::new();
-        for position in [
-            Vec3::new(-3.15, -0.48, 0.55),
-            Vec3::new(-2.15, -0.08, -2.35),
-            Vec3::new(4.05, 0.22, 1.10),
-        ] {
+        for position in collectible_positions {
             let block_index = blocks.len();
             blocks.push(Block::new(
                 position,
@@ -497,20 +640,81 @@ impl Scene {
             blocks,
             materials,
             light_position: Vec3::new(-4.5, 8.5, -5.5),
-            light_color: Vec3::new(1.0, 0.72, 0.48) * 6.0,
+            light_color: match level {
+                LevelKind::Hills => Vec3::new(1.0, 0.72, 0.48) * 6.0,
+                LevelKind::Haunted => Vec3::new(0.46, 0.58, 1.0) * 5.2,
+                LevelKind::Aquatic => Vec3::new(0.38, 0.86, 1.0) * 5.8,
+            },
+            level,
             bvh_nodes: Vec::new(),
             block_indices: Vec::new(),
             character_start,
             character_count,
+            enemy_start: 0,
+            enemy_count: 0,
             walkable_blocks,
             decorative_blocks,
             collectibles,
+            elevator,
             crystal_activated: false,
         };
         scene.rebuild_bvh();
         scene
     }
 
+    pub const fn sky_theme(&self) -> usize {
+        self.level.index()
+    }
+
+    pub fn set_enemy_blocks(&mut self, enemy_blocks: &[Block]) {
+        if self.enemy_count == 0 {
+            self.enemy_start = self.blocks.len();
+            self.enemy_count = enemy_blocks.len();
+            self.blocks.extend_from_slice(enemy_blocks);
+        } else {
+            debug_assert_eq!(enemy_blocks.len(), self.enemy_count);
+            self.blocks[self.enemy_start..self.enemy_start + self.enemy_count]
+                .copy_from_slice(enemy_blocks);
+        }
+        self.rebuild_bvh();
+    }
+
+    pub fn update_dynamic(&mut self, character: &[Block], enemy_blocks: &[Block]) {
+        debug_assert_eq!(character.len(), self.character_count);
+        debug_assert_eq!(enemy_blocks.len(), self.enemy_count);
+        self.blocks[self.character_start..self.character_start + self.character_count]
+            .copy_from_slice(character);
+        self.blocks[self.enemy_start..self.enemy_start + self.enemy_count]
+            .copy_from_slice(enemy_blocks);
+        self.rebuild_bvh();
+    }
+
+    pub fn update_mechanisms(&mut self, time: f32) {
+        let travel = 0.5 - 0.5 * (time * 0.72 + self.elevator.phase).cos();
+        self.elevator.current_top =
+            self.elevator.bottom_top * (1.0 - travel) + self.elevator.top_top * travel;
+        let platform_height = 0.22;
+        self.blocks[self.elevator.block_index] = Block::new(
+            Vec3::new(
+                self.elevator.center.x,
+                self.elevator.current_top - platform_height * 0.5,
+                self.elevator.center.z,
+            ),
+            Vec3::new(self.elevator.size.x, platform_height, self.elevator.size.z),
+            self.blocks[self.elevator.block_index].material,
+        );
+    }
+
+    pub fn is_riding_elevator(&self, position: Vec3) -> bool {
+        self.elevator.contains(position.x, position.z)
+            && (position.y - self.elevator.current_top).abs() < 0.28
+    }
+
+    pub const fn elevator_top(&self) -> f32 {
+        self.elevator.current_top
+    }
+
+    #[cfg(test)]
     pub fn update_character(&mut self, character: &[Block]) {
         debug_assert_eq!(character.len(), self.character_count);
         self.blocks[self.character_start..self.character_start + self.character_count]
@@ -536,12 +740,67 @@ impl Scene {
         }
     }
 
+    pub fn ground_height_at(&self, x: f32, z: f32) -> f32 {
+        if self.elevator.contains(x, z) {
+            return self.elevator.current_top;
+        }
+        match self.level {
+            LevelKind::Hills => {
+                if (4.05..=6.30).contains(&x) && (-4.55..=-1.75).contains(&z) {
+                    1.30
+                } else {
+                    Self::ground_height(x, z)
+                }
+            }
+            LevelKind::Haunted => {
+                if ((4.05..=6.30).contains(&x) && (-1.60..=1.82).contains(&z))
+                    || ((4.65..=5.75).contains(&x) && (1.82..=2.17).contains(&z))
+                {
+                    1.40
+                } else if ((-0.50..=3.90).contains(&x) && (-0.80..=2.30).contains(&z))
+                    || ((1.02..=2.38).contains(&x) && (2.30..=2.64).contains(&z))
+                {
+                    -0.10
+                } else if (1.02..=2.38).contains(&x) && (2.64..=2.86).contains(&z) {
+                    -0.36
+                } else if (1.02..=2.38).contains(&x) && (2.86..=3.10).contains(&z) {
+                    -0.62
+                } else if ((-4.55..=-2.15).contains(&x) && (-2.90..=-0.80).contains(&z))
+                    || ((-3.92..=-2.78).contains(&x) && (-0.80..=-0.66).contains(&z))
+                {
+                    -0.45
+                } else if (-3.92..=-2.78).contains(&x) && (-0.66..=-0.42).contains(&z) {
+                    -0.64
+                } else {
+                    -0.80
+                }
+            }
+            LevelKind::Aquatic => {
+                if ((4.05..=6.30).contains(&x) && (-4.55..=-1.05).contains(&z))
+                    || ((3.25..=4.12).contains(&x) && (-1.74..=-0.96).contains(&z))
+                {
+                    1.20
+                } else if ((2.20..=3.30).contains(&x) && (-0.76..=-0.49).contains(&z))
+                    || ((0.0..=4.20).contains(&x) && (-0.50..=2.60).contains(&z))
+                {
+                    -0.10
+                } else if ((-4.70..=-1.50).contains(&x) && (-2.95..=-0.85).contains(&z))
+                    || ((-1.50..=0.25).contains(&x) && (1.65..=2.70).contains(&z))
+                {
+                    -0.40
+                } else {
+                    -0.80
+                }
+            }
+        }
+    }
+
     pub fn collides_with_world(&self, bounds_min: Vec3, bounds_max: Vec3) -> bool {
         const EDGE_MARGIN: f32 = 0.04;
-        if bounds_min.x < -5.0 + EDGE_MARGIN
-            || bounds_max.x > 5.0 - EDGE_MARGIN
-            || bounds_min.z < -4.0 + EDGE_MARGIN
-            || bounds_max.z > 4.0 - EDGE_MARGIN
+        if bounds_min.x < -6.5 + EDGE_MARGIN
+            || bounds_max.x > 6.5 - EDGE_MARGIN
+            || bounds_min.z < -5.2 + EDGE_MARGIN
+            || bounds_max.z > 5.2 - EDGE_MARGIN
         {
             return true;
         }
@@ -585,9 +844,9 @@ impl Scene {
         if self.crystal_activated || self.collectibles.iter().any(|item| item.active) {
             return false;
         }
-        let crystal_position = Vec3::new(1.65, -0.10, 1.15);
+        let crystal_position = self.crystal_position();
         let offset = crystal_position - player_position;
-        if Vec3::new(offset.x, 0.0, offset.z).length() < 1.15 {
+        if Vec3::new(offset.x, 0.0, offset.z).length() < 1.65 {
             self.crystal_activated = true;
             self.light_color = Vec3::new(0.42, 0.82, 1.0) * 7.5;
             self.materials[4].albedo = Vec3::new(0.18, 0.82, 1.0);
@@ -595,6 +854,13 @@ impl Scene {
             true
         } else {
             false
+        }
+    }
+
+    pub fn crystal_position(&self) -> Vec3 {
+        match self.level {
+            LevelKind::Haunted => Vec3::new(1.65, -0.10, 0.0),
+            LevelKind::Hills | LevelKind::Aquatic => Vec3::new(1.65, -0.10, 1.15),
         }
     }
 
@@ -606,22 +872,6 @@ impl Scene {
             total,
             crystal_activated: self.crystal_activated,
         }
-    }
-
-    pub fn reset_puzzle(&mut self) {
-        for collectible in &mut self.collectibles {
-            collectible.active = true;
-            self.blocks[collectible.block_index] = Block::new(
-                collectible.position,
-                Vec3::new(0.28, 0.46, 0.28),
-                collectible.material,
-            );
-        }
-        self.crystal_activated = false;
-        self.light_color = Vec3::new(1.0, 0.72, 0.48) * 6.0;
-        self.materials[4].albedo = Vec3::new(0.10, 0.62, 0.92);
-        self.materials[4].emission = Vec3::new(0.02, 0.16, 0.28);
-        self.rebuild_bvh();
     }
 
     pub fn hit(&self, ray: Ray, min_distance: f32, max_distance: f32) -> Option<Hit> {
@@ -692,6 +942,353 @@ impl Scene {
             self.blocks.len(),
         );
     }
+}
+
+fn add_vertical_landmark(
+    level: LevelKind,
+    blocks: &mut Vec<Block>,
+    walkable: &mut Vec<usize>,
+    decorative: &mut Vec<usize>,
+    fragment_material: usize,
+    foliage_material: usize,
+) -> Elevator {
+    let (summit_center, summit_size, summit_top, elevator_center, elevator_bottom, phase) =
+        match level {
+            LevelKind::Hills => (
+                Vec3::new(5.20, 0.0, -3.15),
+                Vec3::new(2.20, 2.60, 2.80),
+                1.30,
+                Vec3::new(3.55, 0.0, -2.75),
+                -0.72,
+                0.0,
+            ),
+            LevelKind::Haunted => (
+                Vec3::new(5.20, 0.05, 0.10),
+                Vec3::new(2.20, 2.70, 3.40),
+                1.40,
+                Vec3::new(5.20, 0.0, 2.75),
+                -0.72,
+                1.8,
+            ),
+            LevelKind::Aquatic => (
+                Vec3::new(5.20, -0.05, -2.80),
+                Vec3::new(2.20, 2.50, 3.50),
+                1.20,
+                Vec3::new(2.75, 0.0, -1.35),
+                -0.08,
+                3.4,
+            ),
+        };
+
+    walkable.push(blocks.len());
+    blocks.push(Block::new(
+        summit_center,
+        summit_size,
+        match level {
+            LevelKind::Hills => 0,
+            LevelKind::Haunted => 1,
+            LevelKind::Aquatic => 0,
+        },
+    ));
+
+    let elevator_size = Vec3::new(1.05, 0.22, 1.20);
+    let elevator_material = match level {
+        LevelKind::Haunted => 2,
+        LevelKind::Hills | LevelKind::Aquatic => 3,
+    };
+    let elevator_index = blocks.len();
+    walkable.push(elevator_index);
+    blocks.push(Block::new(
+        Vec3::new(
+            elevator_center.x,
+            elevator_bottom - elevator_size.y * 0.5,
+            elevator_center.z,
+        ),
+        elevator_size,
+        elevator_material,
+    ));
+
+    // Two slim supports communicate the lift's motion without creating a visual cage.
+    // Their orientation leaves the approach and the elevated exit completely open.
+    let guide_offsets = match level {
+        LevelKind::Haunted => [(-0.62, 0.0), (0.62, 0.0)],
+        LevelKind::Hills | LevelKind::Aquatic => [(-0.62, -0.68), (0.62, -0.68)],
+    };
+    for (dx, dz) in guide_offsets {
+        blocks.push(Block::new(
+            Vec3::new(elevator_center.x + dx, 0.48, elevator_center.z + dz),
+            Vec3::new(0.13, 3.35, 0.13),
+            elevator_material,
+        ));
+        blocks.push(Block::new(
+            Vec3::new(elevator_center.x + dx, 2.18, elevator_center.z + dz),
+            Vec3::new(0.26, 0.12, 0.26),
+            fragment_material,
+        ));
+    }
+
+    match level {
+        LevelKind::Hills => {
+            // A stepped mountain silhouette hides the summit from the spawn side.
+            for (center, size) in [
+                (Vec3::new(5.45, 0.72, -4.18), Vec3::new(1.45, 1.15, 0.55)),
+                (Vec3::new(5.82, 1.04, -2.16), Vec3::new(0.55, 0.52, 1.10)),
+                (Vec3::new(4.42, 1.05, -4.05), Vec3::new(0.38, 0.48, 0.72)),
+            ] {
+                blocks.push(Block::new(center, size, 0));
+            }
+            for (x, z, scale) in [(4.45, -3.95, 0.52), (5.85, -3.82, 0.62)] {
+                decorative.push(blocks.len());
+                blocks.push(Block::new(
+                    Vec3::new(x, summit_top + scale * 0.35, z),
+                    Vec3::new(scale, scale * 0.70, scale),
+                    foliage_material,
+                ));
+            }
+        }
+        LevelKind::Haunted => {
+            // A narrow stone landing separates the lift from the mansion wall.
+            walkable.push(blocks.len());
+            blocks.push(Block::new(
+                Vec3::new(5.20, 1.30, 1.99),
+                Vec3::new(1.05, 0.20, 0.36),
+                1,
+            ));
+
+            // A ruined bell tower creates a concealed rooftop path behind the mansion.
+            for (center, size) in [
+                (Vec3::new(4.35, 2.38, -1.18), Vec3::new(0.28, 1.95, 0.28)),
+                (Vec3::new(6.02, 2.38, -1.18), Vec3::new(0.28, 1.95, 0.28)),
+                (Vec3::new(5.18, 3.28, -1.18), Vec3::new(1.95, 0.20, 0.28)),
+                (Vec3::new(6.02, 2.05, 0.95), Vec3::new(0.28, 1.35, 0.28)),
+            ] {
+                blocks.push(Block::new(center, size, 1));
+            }
+            decorative.push(blocks.len());
+            blocks.push(Block::new(
+                Vec3::new(5.18, 2.45, -1.18),
+                Vec3::new(0.36, 0.54, 0.36),
+                fragment_material,
+            ));
+        }
+        LevelKind::Aquatic => {
+            // The beach lift stands in open water: a low dock reaches it from the reef,
+            // while a separate high boardwalk joins it to the lighthouse cliff.
+            walkable.push(blocks.len());
+            blocks.push(Block::new(
+                Vec3::new(2.75, -0.20, -0.625),
+                Vec3::new(1.05, 0.20, 0.25),
+                3,
+            ));
+            walkable.push(blocks.len());
+            blocks.push(Block::new(
+                Vec3::new(3.69, 1.10, -1.35),
+                Vec3::new(0.84, 0.20, 0.78),
+                3,
+            ));
+
+            // Coral and a tiny lighthouse frame the high tide lookout.
+            blocks.push(Block::new(
+                Vec3::new(5.55, 2.18, -3.65),
+                Vec3::new(0.72, 1.96, 0.72),
+                1,
+            ));
+            blocks.push(Block::new(
+                Vec3::new(5.55, 3.20, -3.65),
+                Vec3::new(1.02, 0.18, 1.02),
+                3,
+            ));
+            for (x, z, height) in [(4.35, -3.72, 0.82), (5.95, -2.05, 0.68)] {
+                decorative.push(blocks.len());
+                blocks.push(Block::new(
+                    Vec3::new(x, summit_top + height * 0.5, z),
+                    Vec3::new(0.22, height, 0.22),
+                    foliage_material,
+                ));
+            }
+        }
+    }
+
+    Elevator {
+        block_index: elevator_index,
+        center: elevator_center,
+        size: elevator_size,
+        bottom_top: elevator_bottom,
+        top_top: summit_top,
+        current_top: elevator_bottom,
+        phase,
+    }
+}
+
+fn build_haunted_layout(fragment_material: usize) -> (Vec<Block>, Vec<usize>, Vec<usize>) {
+    let mut blocks = vec![
+        Block::new(Vec3::new(0.0, -1.3, 0.0), Vec3::new(13.0, 1.0, 10.4), 0),
+        Block::new(Vec3::new(0.0, -2.15, 0.0), Vec3::new(10.8, 0.7, 8.4), 0),
+        Block::new(Vec3::new(0.0, -2.8, 0.0), Vec3::new(7.8, 0.6, 6.2), 0),
+        Block::new(Vec3::new(0.0, -3.35, 0.0), Vec3::new(3.2, 0.5, 2.4), 0),
+        // Raised haunted mansion.
+        Block::new(Vec3::new(1.70, -0.45, 0.75), Vec3::new(4.40, 0.70, 3.10), 1),
+        // Western crypt island.
+        Block::new(
+            Vec3::new(-3.35, -0.625, -1.85),
+            Vec3::new(2.40, 0.35, 2.10),
+            0,
+        ),
+    ];
+    let mut walkable = vec![0, 1, 2, 3, 4, 5];
+    let decorative = Vec::new();
+
+    // Mansion entrance steps, approached from the southern graveyard.
+    for (z, top) in [(2.96, -0.62), (2.76, -0.36), (2.54, -0.10)] {
+        let height = top + 1.30;
+        walkable.push(blocks.len());
+        blocks.push(Block::new(
+            Vec3::new(1.70, top - height * 0.5, z),
+            Vec3::new(1.30, height, 0.24),
+            1,
+        ));
+    }
+
+    // Low crypt steps create a separate western objective route.
+    for (z, top) in [(-0.56, -0.64), (-0.78, -0.45)] {
+        let height = top + 1.30;
+        walkable.push(blocks.len());
+        blocks.push(Block::new(
+            Vec3::new(-3.35, top - height * 0.5, z),
+            Vec3::new(1.10, height, 0.24),
+            0,
+        ));
+    }
+
+    // Mansion walls form a room with a wide, readable front entrance.
+    for (center, size) in [
+        (Vec3::new(1.70, 0.58, -0.72), Vec3::new(4.40, 1.36, 0.28)),
+        (Vec3::new(-0.36, 0.58, 0.75), Vec3::new(0.28, 1.36, 3.10)),
+        (Vec3::new(3.76, 0.58, 0.75), Vec3::new(0.28, 1.36, 3.10)),
+        (Vec3::new(0.18, 0.58, 2.22), Vec3::new(1.05, 1.36, 0.28)),
+        (Vec3::new(3.22, 0.58, 2.22), Vec3::new(1.05, 1.36, 0.28)),
+    ] {
+        blocks.push(Block::new(center, size, 1));
+    }
+    for x in [-0.25, 0.75, 1.75, 2.75, 3.65] {
+        blocks.push(Block::new(
+            Vec3::new(x, 1.42, 0.75),
+            Vec3::new(0.16, 0.16, 3.35),
+            2,
+        ));
+    }
+
+    // The green haunted crystal replaces the open-air temple focal point.
+    blocks.push(Block::new(
+        Vec3::new(1.65, 0.92, 0.0),
+        Vec3::new(0.82, 1.62, 0.82),
+        4,
+    ));
+    blocks.push(Block::new(
+        Vec3::new(1.65, 1.92, 0.0),
+        Vec3::new(0.52, 0.52, 0.52),
+        4,
+    ));
+    for (x, z) in [(-4.2, 0.1), (-2.5, 1.3), (-1.2, -2.9), (4.4, -1.7)] {
+        blocks.push(Block::new(
+            Vec3::new(x, -0.42, z),
+            Vec3::new(0.38, 0.76, 0.22),
+            1,
+        ));
+        blocks.push(Block::new(
+            Vec3::new(x, 0.02, z - 0.08),
+            Vec3::new(0.12, 0.24, 0.12),
+            fragment_material,
+        ));
+    }
+    (blocks, walkable, decorative)
+}
+
+fn build_aquatic_layout(
+    fragment_material: usize,
+    foliage_material: usize,
+) -> (Vec<Block>, Vec<usize>, Vec<usize>) {
+    let mut blocks = vec![
+        Block::new(Vec3::new(0.0, -1.3, 0.0), Vec3::new(13.0, 1.0, 10.4), 0),
+        Block::new(Vec3::new(0.0, -2.15, 0.0), Vec3::new(10.8, 0.7, 8.4), 0),
+        Block::new(Vec3::new(0.0, -2.8, 0.0), Vec3::new(7.8, 0.6, 6.2), 0),
+        // High eastern reef and low western dock are disconnected by water.
+        Block::new(Vec3::new(2.10, -0.45, 1.05), Vec3::new(4.20, 0.70, 3.10), 1),
+        Block::new(
+            Vec3::new(-3.10, -0.60, -1.90),
+            Vec3::new(3.20, 0.40, 2.10),
+            1,
+        ),
+    ];
+    let mut walkable = vec![0, 1, 2, 3, 4];
+    let mut decorative = Vec::new();
+
+    // A deep channel cuts the level in two; the raised wooden bridge is mandatory.
+    blocks.push(Block::new(
+        Vec3::new(-0.65, -0.72, 0.0),
+        Vec3::new(0.90, 0.16, 6.80),
+        5,
+    ));
+    for i in 0..5 {
+        walkable.push(blocks.len());
+        blocks.push(Block::new(
+            Vec3::new(-1.30 + i as f32 * 0.38, -0.48, 2.18),
+            Vec3::new(0.32, 0.16, 0.95),
+            2,
+        ));
+    }
+    blocks.push(Block::new(
+        Vec3::new(-0.55, -0.19, 1.70),
+        Vec3::new(1.90, 0.10, 0.10),
+        2,
+    ));
+    blocks.push(Block::new(
+        Vec3::new(-0.55, -0.19, 2.66),
+        Vec3::new(1.90, 0.10, 0.10),
+        2,
+    ));
+
+    // Reef altar, waterfall and coral silhouettes.
+    blocks.push(Block::new(
+        Vec3::new(1.65, 0.92, 1.15),
+        Vec3::new(0.88, 1.64, 0.88),
+        4,
+    ));
+    blocks.push(Block::new(
+        Vec3::new(1.65, 1.95, 1.15),
+        Vec3::new(0.54, 0.54, 0.54),
+        4,
+    ));
+    blocks.push(Block::new(
+        Vec3::new(3.10, -0.02, 2.58),
+        Vec3::new(1.20, 0.12, 0.70),
+        5,
+    ));
+    blocks.push(Block::new(
+        Vec3::new(3.10, -0.75, 2.96),
+        Vec3::new(1.20, 1.55, 0.10),
+        5,
+    ));
+    for (x, z, height, material) in [
+        (-4.45, 0.30, 0.85, fragment_material),
+        (-2.10, -3.35, 0.72, foliage_material),
+        (4.45, -1.40, 1.05, 3),
+        (4.35, 3.25, 0.78, fragment_material),
+    ] {
+        decorative.push(blocks.len());
+        blocks.push(Block::new(
+            Vec3::new(x, -0.80 + height * 0.5, z),
+            Vec3::new(0.25, height, 0.25),
+            material,
+        ));
+        decorative.push(blocks.len());
+        blocks.push(Block::new(
+            Vec3::new(x + 0.20, -0.45 + height * 0.45, z),
+            Vec3::new(0.32, 0.18, 0.20),
+            material,
+        ));
+    }
+    (blocks, walkable, decorative)
 }
 
 fn aabbs_overlap(a_min: Vec3, a_max: Vec3, b_min: Vec3, b_max: Vec3) -> bool {

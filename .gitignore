@@ -1,4 +1,7 @@
 /target/
+/tools/
+/videos/*_silent.mp4
+/videos/qa_*.png
 *.log
 screenshots/*.png
 screenshots/*.bmp

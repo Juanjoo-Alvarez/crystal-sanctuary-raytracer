@@ -104,12 +104,7 @@ impl Renderer {
                             }
                             let mut color = color / samples_per_pixel as f32;
                             color = tone_map_aces(color * 0.82).powf(1.0 / 2.2);
-                            let screen_x = x as f32 / width as f32 * 2.0 - 1.0;
-                            let screen_y = y as f32 / height as f32 * 2.0 - 1.0;
-                            let vignette = (1.04
-                                - (screen_x * screen_x + screen_y * screen_y) * 0.13)
-                                .clamp(0.72, 1.0);
-                            color = (color * vignette).clamp01();
+                            color = color.clamp01();
                             let index = x * 4;
                             row[index] = (color.x * 255.0) as u8;
                             row[index + 1] = (color.y * 255.0) as u8;
@@ -150,7 +145,7 @@ impl Renderer {
 
 fn trace(scene: &Scene, ray: Ray, depth: u32, time: f32) -> Vec3 {
     let Some(hit) = scene.hit(ray, 0.002, 1000.0) else {
-        return sky(ray.direction);
+        return sky(ray.direction, scene.sky_theme());
     };
     let material = scene.materials[hit.material];
     let albedo = material.sample_albedo(hit.point, hit.normal, time);
@@ -190,7 +185,7 @@ fn trace(scene: &Scene, ray: Ray, depth: u32, time: f32) -> Vec3 {
     color += material.emission * emission_pulse;
 
     if depth == 0 {
-        return apply_atmosphere(color, ray.direction, hit.distance);
+        return apply_atmosphere(color, ray.direction, hit.distance, scene.sky_theme());
     }
 
     let cosine = view.dot(hit.normal).clamp(0.0, 1.0);
@@ -229,13 +224,16 @@ fn trace(scene: &Scene, ray: Ray, depth: u32, time: f32) -> Vec3 {
             color = color.lerp(tint, material.transparency * (1.0 - fresnel));
         }
     }
-    apply_atmosphere(color, ray.direction, hit.distance)
+    apply_atmosphere(color, ray.direction, hit.distance, scene.sky_theme())
 }
 
-fn sky(direction: Vec3) -> Vec3 {
+fn sky(direction: Vec3, theme: usize) -> Vec3 {
     let t = (direction.y * 0.5 + 0.5).clamp(0.0, 1.0);
-    let horizon = Vec3::new(0.90, 0.54, 0.32);
-    let zenith = Vec3::new(0.08, 0.28, 0.70);
+    let (horizon, zenith) = match theme {
+        1 => (Vec3::new(0.28, 0.16, 0.38), Vec3::new(0.025, 0.035, 0.12)),
+        2 => (Vec3::new(0.08, 0.55, 0.68), Vec3::new(0.015, 0.16, 0.38)),
+        _ => (Vec3::new(0.90, 0.54, 0.32), Vec3::new(0.08, 0.28, 0.70)),
+    };
     let mut color = horizon.lerp(zenith, t.powf(0.82));
 
     // Layered distant silhouettes give the floating island a real sense of depth.
@@ -245,16 +243,29 @@ fn sky(direction: Vec3) -> Vec3 {
     let near_ridge =
         0.005 + (azimuth * 1.7 - 0.3).sin() * 0.035 + (azimuth * 4.1 + 0.8).cos().abs() * 0.045;
     if direction.y < far_ridge {
-        color = Vec3::new(0.20, 0.24, 0.46).lerp(Vec3::new(0.42, 0.30, 0.42), 0.45);
+        color = match theme {
+            1 => Vec3::new(0.10, 0.055, 0.19),
+            2 => Vec3::new(0.04, 0.34, 0.46),
+            _ => Vec3::new(0.20, 0.24, 0.46).lerp(Vec3::new(0.42, 0.30, 0.42), 0.45),
+        };
     }
     if direction.y < near_ridge {
-        color = Vec3::new(0.055, 0.14, 0.32).lerp(Vec3::new(0.16, 0.20, 0.42), 0.35);
+        color = match theme {
+            1 => Vec3::new(0.025, 0.020, 0.075),
+            2 => Vec3::new(0.015, 0.20, 0.32),
+            _ => Vec3::new(0.055, 0.14, 0.32).lerp(Vec3::new(0.16, 0.20, 0.42), 0.35),
+        };
     }
 
     let sun_direction = Vec3::new(-0.42, 0.62, -0.66).normalized();
     let sun = direction.dot(sun_direction).max(0.0);
-    color += Vec3::new(1.0, 0.44, 0.16) * sun.powf(52.0) * 1.8;
-    color += Vec3::new(1.0, 0.86, 0.58) * sun.powf(720.0) * 7.0;
+    let sun_tint = match theme {
+        1 => Vec3::new(0.52, 0.72, 1.0),
+        2 => Vec3::new(0.45, 0.92, 1.0),
+        _ => Vec3::new(1.0, 0.62, 0.28),
+    };
+    color += sun_tint * sun.powf(52.0) * 1.8;
+    color += sun_tint.lerp(Vec3::ONE, 0.65) * sun.powf(720.0) * 7.0;
 
     // Broad soft cloud bands instead of a noisy checker pattern.
     if direction.y > 0.08 && direction.y < 0.48 {
@@ -268,9 +279,9 @@ fn sky(direction: Vec3) -> Vec3 {
     color
 }
 
-fn apply_atmosphere(color: Vec3, direction: Vec3, distance: f32) -> Vec3 {
+fn apply_atmosphere(color: Vec3, direction: Vec3, distance: f32, theme: usize) -> Vec3 {
     let fog = (1.0 - (-distance * 0.018).exp()).clamp(0.0, 0.30);
-    color.lerp(sky(direction), fog * 0.42)
+    color.lerp(sky(direction, theme), fog * 0.42)
 }
 
 fn tone_map_aces(color: Vec3) -> Vec3 {
